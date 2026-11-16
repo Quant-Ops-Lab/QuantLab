@@ -253,8 +253,10 @@ it cannot turn unproven research into a guaranteed profitable product.
 
 ## Optional challenger architecture
 
-The optional `quantlab.research.challenger` module adds a lightweight path for
-model research without making the live worker download large models:
+The mandatory project dependencies include pandas, SciPy, PyTorch, Transformers,
+and XGBoost. The `quantlab.models.challenger_xgb_nlp` module uses that stack for
+research while keeping model downloads and inference out of Streamlit request
+handling:
 
 1. Receipt-time event features aggregate only verified events received before a
   bar timestamp. Publication time is retained as context but cannot override
@@ -264,9 +266,9 @@ model research without making the live worker download large models:
 3. `ModelWeightLedger` updates model credibility only after realized outcomes
   are recorded. It blends competing probabilities; it does not mutate a live
   model during an open trade.
-4. XGBoost, PyTorch, and transformer adapters are optional under the `ml`
-  dependency extra. They must beat Ridge, SGD, momentum, and abstention on
-  identical chronological folds before shadow promotion.
+4. The calibrated XGBoost challenger and dual financial NLP encoder must beat
+  Ridge, SGD, momentum, and abstention on identical chronological folds before
+  shadow promotion.
 
 FinBERT/FinTwitBERT weights also require a commercial-license review before
 consumer use. A model name, benchmark win, or sentiment score is not evidence
