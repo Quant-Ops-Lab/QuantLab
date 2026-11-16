@@ -1,0 +1,133 @@
+# Managed Postgres enabled for cross-service storage. Deploy only after setting
+# Cloudflare Access / equivalent authentication on the Streamlit command UI.
+services:
+  - type: web
+    name: quantlab-command
+    runtime: docker
+    plan: starter
+    dockerCommand: streamlit run src/quantlab/console/app.py --server.address=0.0.0.0 --server.port=10000 --server.headless=true
+    autoDeployTrigger: off
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase: {name: quantlab-postgres, property: connectionString}
+      - key: QUANTLAB_EVENT_DB
+        fromDatabase: {name: quantlab-postgres, property: connectionString}
+      - key: QUANTLAB_MARKET_DB
+        fromDatabase: {name: quantlab-postgres, property: connectionString}
+      - key: QUANTLAB_ALERT_DB
+        fromDatabase: {name: quantlab-postgres, property: connectionString}
+      - key: PORT
+        value: "10000"
+      - key: QUANTLAB_REQUIRE_AUTH
+        value: "1"
+      - key: QUANTLAB_CONSOLE_PASSWORD
+        sync: false
+      - key: QUANTLAB_ADMIN_PASSWORD
+        sync: false
+      - key: APCA_API_KEY_ID
+        sync: false
+      - key: APCA_API_SECRET_KEY
+        sync: false
+  - type: worker
+    name: quantlab-crypto
+    runtime: docker
+    plan: starter
+    dockerCommand: python -m quantlab.services.crypto_daemon
+    autoDeployTrigger: off
+    envVars:
+      - key: QUANTLAB_ALERT_DB
+        fromDatabase: {name: quantlab-postgres, property: connectionString}
+      - key: QUANTLAB_CRYPTO_PAIRS
+        value: BTC/USD,ETH/USD
+  - type: worker
+    name: quantlab-equities
+    runtime: docker
+    plan: starter
+    dockerCommand: python -m quantlab.services.equity_daemon
+    autoDeployTrigger: off
+    envVars:
+      - key: QUANTLAB_ALERT_DB
+        fromDatabase: {name: quantlab-postgres, property: connectionString}
+      - key: APCA_API_KEY_ID
+        sync: false
+      - key: APCA_API_SECRET_KEY
+        sync: false
+  - type: worker
+    name: quantlab-edgar
+    runtime: docker
+    plan: starter
+    dockerCommand: python -m quantlab.intelligence.sec_monitor
+    autoDeployTrigger: off
+    envVars:
+      - key: SEC_USER_AGENT
+        sync: false
+      - key: QUANTLAB_EVENT_DB
+        fromDatabase: {name: quantlab-postgres, property: connectionString}
+  - type: worker
+    name: quantlab-quotes
+    runtime: docker
+    plan: starter
+    dockerCommand: python -m quantlab.services.market_monitor
+    autoDeployTrigger: off
+    envVars:
+      - key: PUBLIC_ACCOUNT_ID
+        sync: false
+      - key: PUBLIC_API_TOKEN
+        sync: false
+      - key: QUANTLAB_MARKET_DB
+        fromDatabase: {name: quantlab-postgres, property: connectionString}
+  - type: worker
+    name: quantlab-notifier
+    runtime: docker
+    plan: starter
+    dockerCommand: python -m quantlab.services.alert_dispatcher
+    autoDeployTrigger: off
+    envVars:
+      - key: QUANTLAB_ALERT_DB
+        fromDatabase: {name: quantlab-postgres, property: connectionString}
+      - key: QUANTLAB_DELIVERY_DB
+        fromDatabase: {name: quantlab-postgres, property: connectionString}
+      - key: QUANTLAB_DISCORD_WEBHOOK_URL
+        sync: false
+      - key: QUANTLAB_SLACK_WEBHOOK_URL
+        sync: false
+      - key: QUANTLAB_SMS_PROVIDER
+        sync: false
+      - key: QUANTLAB_SMS_TO
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM_NUMBER
+        sync: false
+      - key: QUANTLAB_EMAIL_HOST
+        sync: false
+      - key: QUANTLAB_EMAIL_PORT
+        sync: false
+      - key: QUANTLAB_EMAIL_USER
+        sync: false
+      - key: QUANTLAB_EMAIL_PASSWORD
+        sync: false
+      - key: QUANTLAB_EMAIL_FROM
+        sync: false
+      - key: QUANTLAB_EMAIL_TO
+        sync: false
+  - type: worker
+    name: quantlab-research
+    runtime: docker
+    plan: starter
+    dockerCommand: python -m quantlab.services.research_daemon
+    autoDeployTrigger: off
+    envVars:
+      - key: MASSIVE_API_KEY
+        sync: false
+      - key: QUANTLAB_OPPORTUNITY_DIR
+        value: /opt/quantlab/artifacts/opportunity
+      - key: QUANTLAB_ALERT_DB
+        fromDatabase: {name: quantlab-postgres, property: connectionString}
+databases:
+  - name: quantlab-postgres
+    plan: 0.1c-256mb
+    databaseName: quantlab
+    user: quantlab

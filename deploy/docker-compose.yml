@@ -1,0 +1,96 @@
+# Development / single-host deployment. SQLite is local and shared only via local volume.
+# Web UI MUST be restricted behind VPN/identity proxy before Internet exposure.
+services:
+  command:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8501:8501"
+    volumes:
+      - quantlab_state:/opt/quantlab/artifacts
+    env_file:
+      - ../.env
+    environment:
+      QUANTLAB_ALERT_DB: /opt/quantlab/artifacts/alerts.sqlite
+      QUANTLAB_EVENT_DB: /opt/quantlab/artifacts/events.sqlite
+      QUANTLAB_MARKET_DB: /opt/quantlab/artifacts/market.sqlite
+  intel:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ["python","-m","quantlab.intelligence.sec_monitor"]
+    restart: unless-stopped
+    volumes:
+      - quantlab_state:/opt/quantlab/artifacts
+    env_file:
+      - ../.env
+    environment:
+      QUANTLAB_EVENT_DB: /opt/quantlab/artifacts/events.sqlite
+      SEC_POLL_SECONDS: 900
+  market:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ["python","-m","quantlab.services.market_monitor"]
+    restart: unless-stopped
+    volumes:
+      - quantlab_state:/opt/quantlab/artifacts
+    env_file:
+      - ../.env
+    environment:
+      QUANTLAB_MARKET_DB: /opt/quantlab/artifacts/market.sqlite
+      QUOTE_POLL_SECONDS: 60
+  crypto:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ["python","-m","quantlab.services.crypto_daemon"]
+    restart: unless-stopped
+    volumes:
+      - quantlab_state:/opt/quantlab/artifacts
+    env_file:
+      - ../.env
+    environment:
+      QUANTLAB_ALERT_DB: /opt/quantlab/artifacts/alerts.sqlite
+      QUANTLAB_CRYPTO_POLL_SECONDS: 30
+  equities:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ["python","-m","quantlab.services.equity_daemon"]
+    restart: unless-stopped
+    volumes:
+      - quantlab_state:/opt/quantlab/artifacts
+    env_file:
+      - ../.env
+    environment:
+      QUANTLAB_ALERT_DB: /opt/quantlab/artifacts/alerts.sqlite
+  research:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ["python","-m","quantlab.services.research_daemon"]
+    restart: unless-stopped
+    volumes:
+      - quantlab_state:/opt/quantlab/artifacts
+    env_file:
+      - ../.env
+    environment:
+      QUANTLAB_OPPORTUNITY_DIR: /opt/quantlab/artifacts/opportunity
+  notifier:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ["python","-m","quantlab.services.alert_dispatcher"]
+    restart: unless-stopped
+    volumes:
+      - quantlab_state:/opt/quantlab/artifacts
+    env_file:
+      - ../.env
+    environment:
+      QUANTLAB_ALERT_DB: /opt/quantlab/artifacts/alerts.sqlite
+      QUANTLAB_DELIVERY_DB: /opt/quantlab/artifacts/alerts.sqlite
+volumes:
+  quantlab_state:
