@@ -62,11 +62,14 @@ def run_once() -> Path:
 
 
 def seconds_until_run(now: datetime | None = None) -> float:
+    """Schedule after the next-day EOD provider release window."""
     now = now or datetime.now(timezone.utc)
     local = now.astimezone(NEW_YORK)
-    target = datetime.combine(local.date(), clock_time(22, 30), tzinfo=NEW_YORK)
+    # Massive Basic generally exposes the prior session after midnight ET.
+    # Leave a release buffer rather than running at the old 22:30 ET time.
+    target = datetime.combine(local.date(), clock_time(1, 30), tzinfo=NEW_YORK)
     if target <= local:
-        target = datetime.combine(local.date() + timedelta(days=1), clock_time(22, 30), tzinfo=NEW_YORK)
+        target = datetime.combine(local.date() + timedelta(days=1), clock_time(1, 30), tzinfo=NEW_YORK)
     return max(1.0, (target - local).total_seconds())
 
 

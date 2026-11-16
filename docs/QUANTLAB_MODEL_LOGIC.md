@@ -250,3 +250,25 @@ transfers across domains.
 Each expansion needs its own data contract, execution simulator, risk policy,
 walk-forward benchmark, and release evidence. A chatbot can explain that work;
 it cannot turn unproven research into a guaranteed profitable product.
+
+## Optional challenger architecture
+
+The optional `quantlab.research.challenger` module adds a lightweight path for
+model research without making the live worker download large models:
+
+1. Receipt-time event features aggregate only verified events received before a
+  bar timestamp. Publication time is retained as context but cannot override
+  the receipt-time information boundary.
+2. `fit_sgd_challenger` fits a standardized logistic SGD model on one training
+  fold. It uses `fit`, not `partial_fit`, so fold boundaries remain explicit.
+3. `ModelWeightLedger` updates model credibility only after realized outcomes
+  are recorded. It blends competing probabilities; it does not mutate a live
+  model during an open trade.
+4. XGBoost, PyTorch, and transformer adapters are optional under the `ml`
+  dependency extra. They must beat Ridge, SGD, momentum, and abstention on
+  identical chronological folds before shadow promotion.
+
+FinBERT/FinTwitBERT weights also require a commercial-license review before
+consumer use. A model name, benchmark win, or sentiment score is not evidence
+of a trading edge. Heavy models stay in the research process, never in the
+Streamlit request path or broker authorization path.

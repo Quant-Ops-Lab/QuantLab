@@ -101,7 +101,7 @@ require_operator_password()
 from quantlab.console.theme import THEMES,css
 with st.sidebar:
     st.markdown('### ◈ QuantLab')
-    theme=st.selectbox('Appearance',list(THEMES),index=list(THEMES).index(st.session_state.get('ql_theme','Deck')))
+    theme=st.selectbox('Appearance',list(THEMES),index=list(THEMES).index(st.session_state.get('ql_theme','Neon')))
     st.session_state['ql_theme']=theme
     workspace=st.segmented_control('Experience',['Consumer','Admin'],default='Consumer')
 st.markdown(css(theme),unsafe_allow_html=True)

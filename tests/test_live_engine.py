@@ -83,7 +83,7 @@ def test_kraken_rest_uses_complete_exchange_candles():
     assert len(ohlc)==1 and ohlc[0].close==108 and ohlc[0].volume==12
 
 def test_theme_and_sound_tokens():
-    assert set(THEMES)=={'Deck','Standard','Terminal','Blackout'}
+    assert set(THEMES)=={'Neon','Deck','Standard','Terminal','Blackout'}
     assert '--ql-surface' in css('Deck')
     assert alert_wav()[:4]==b'RIFF'
 

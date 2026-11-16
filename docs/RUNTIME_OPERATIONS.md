@@ -14,7 +14,7 @@ remains a local-development supervisor only.
   order eligibility is separately limited to the regular session unless a
   broker capability explicitly supports extended hours.
 - **Research (`quantlab-research`):** runs the EOD collection and opportunity
-  autopsy on its own schedule after provider data is eligible.
+  autopsy at 01:30 America/New_York, after the free EOD provider release window.
 - **Notifier:** remains a separate delivery process with retry and lease state.
 
 The workers publish research candidates only. They do not submit brokerage

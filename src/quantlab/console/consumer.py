@@ -83,8 +83,7 @@ def _alerts(max_lines:int=40):
 
 def render(theme:str='Deck'):
     st.markdown('<div class="ql-kicker">QUANTLAB / INVEST</div>',unsafe_allow_html=True)
-    st.title('Your portfolio. Your intelligence.')
-    st.caption('Connected market observations only. No fabricated positions, P&L or market prices.')
+    st.markdown('<div class="ql-hero"><div class="ql-status">Research mode · execution disabled</div><div class="ql-hero-title">Your market, with the evidence left visible.</div><div class="ql-hero-meta">Live observations, source-linked news, and scenario analysis without fabricated prices or hidden broker authority.</div></div>',unsafe_allow_html=True)
     tab1,tab2,tab3,tab4=st.tabs(['Markets','Portfolio','Signals','Integrations'])
     with tab1:
         universe=default_universe()
