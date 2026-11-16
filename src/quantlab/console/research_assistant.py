@@ -16,6 +16,10 @@ from typing import Iterable
 from quantlab.console.charts import Candle
 
 
+def _news_value(item, name: str, default=""):
+    return item.get(name, default) if isinstance(item, dict) else getattr(item, name, default)
+
+
 def _return(candles: list[Candle], periods: int) -> float | None:
     if len(candles) <= periods or candles[-periods - 1].close <= 0:
         return None
@@ -79,10 +83,10 @@ def answer(
             "observed_low": low,
             "events": list(events)[:20],
             "news": [
-                {"headline": getattr(item, "headline", ""), "source": getattr(item, "source", ""),
-                 "published_at": getattr(item, "published_at", "").isoformat()
-                 if hasattr(getattr(item, "published_at", ""), "isoformat") else str(getattr(item, "published_at", "")),
-                 "url": getattr(item, "url", "")}
+                {"headline": _news_value(item, "headline"), "source": _news_value(item, "source"),
+                 "published_at": _news_value(item, "published_at").isoformat()
+                 if hasattr(_news_value(item, "published_at"), "isoformat") else str(_news_value(item, "published_at")),
+                 "url": _news_value(item, "url")}
                 for item in list(news)[:20]
             ],
         }
@@ -124,7 +128,7 @@ Label opinions as research and include a heavy disclaimer that this is not perso
         records = list(events)
         articles = list(news)
         headlines = [str(item.get("headline", "Untitled disclosure")) for item in records[:3]]
-        headlines.extend(str(getattr(item, "headline", "Untitled article")) for item in articles[:3])
+        headlines.extend(str(_news_value(item, "headline", "Untitled article")) for item in articles[:3])
         if not headlines:
             return f"{snapshot}. No verified disclosures or recent news are stored for {symbol}."
         return f"{snapshot}. Recent verified context: {'; '.join(headlines)}. This is association, not proof of causality."

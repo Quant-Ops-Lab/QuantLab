@@ -21,7 +21,9 @@ from quantlab.console.integrations import integration_statuses
 
 @st.cache_data(ttl=30,show_spinner=False)
 def _crypto(pair:str,interval:str):
-    return KrakenPublic().ohlc(pair,interval)
+    return [{'start': item.start.isoformat(), 'open': item.open, 'high': item.high,
+             'low': item.low, 'close': item.close, 'samples': item.samples,
+             'volume': item.volume} for item in KrakenPublic().ohlc(pair,interval)]
 
 @st.cache_data(ttl=60,show_spinner=False)
 def _equity(symbol:str,interval:str):
@@ -29,14 +31,25 @@ def _equity(symbol:str,interval:str):
     key=os.getenv('APCA_API_KEY_ID','');secret=os.getenv('APCA_API_SECRET_KEY','')
     tf={'1m':'1Min','5m':'5Min','15m':'15Min','1h':'1Hour','1d':'1Day'}[interval]
     result=AlpacaData(key,secret).bars(symbol,tf,days=20 if interval!='1d' else 120,limit=300)
-    return [Candle(x.timestamp,x.open,x.high,x.low,x.close,1) for x in result]
+    return [{'start': item.timestamp.isoformat(), 'open': item.open, 'high': item.high,
+             'low': item.low, 'close': item.close, 'samples': 1,
+             'volume': item.volume} for item in result]
 
 
 @st.cache_data(ttl=120,show_spinner=False)
 def _stock_news(symbol:str):
     key=os.getenv('APCA_API_KEY_ID','');secret=os.getenv('APCA_API_SECRET_KEY','')
     if not (key and secret):return []
-    return AlpacaData(key,secret).news([symbol],limit=50)
+    return [{'headline_id': item.headline_id, 'headline': item.headline,
+             'summary': item.summary, 'url': item.url, 'symbols': list(item.symbols),
+             'source': item.source, 'published_at': item.published_at.isoformat(),
+             'provider': item.provider}
+            for item in AlpacaData(key,secret).news([symbol],limit=50)]
+
+
+def _candles(rows):
+    return [Candle(datetime.fromisoformat(row['start']),row['open'],row['high'],row['low'],
+                   row['close'],row.get('samples',1),row.get('volume')) for row in rows]
 
 
 def _context_events(symbol:str,limit:int=500):
@@ -90,11 +103,11 @@ def render(theme:str='Deck'):
         show_range=chart_controls.toggle('Range navigator',value=True)
         bars=[]
         try:
-            if asset=='Crypto':bars=_crypto(symbol,frame);label='Kraken · exchange OHLC · last unfinished bar excluded'
+            if asset=='Crypto':bars=_candles(_crypto(symbol,frame));label='Kraken · exchange OHLC · last unfinished bar excluded'
             else:
                 key=os.getenv('APCA_API_KEY_ID','');secret=os.getenv('APCA_API_SECRET_KEY','')
                 if not (key and secret):raise MarketDataError('Alpaca API credentials not configured')
-                bars=_equity(symbol,frame)
+                bars=_candles(_equity(symbol,frame))
                 label='Alpaca · IEX single-venue trades · not consolidated SIP'
             if bars:
                 last=bars[-1]
