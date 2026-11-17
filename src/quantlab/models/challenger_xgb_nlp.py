@@ -24,12 +24,16 @@ class NLPModelConfig:
     finbert_id: str = "ProsusAI/finbert"
     fintwit_id: str = "StephanAkkerman/FinTwitBERT-sentiment"
     device: Optional[str] = None
+    batch_size: int = 64
 
 
 class DualFinancialNLPEncoder:
     """Score verified event text using receipt-time windows only."""
 
     def __init__(self, config: NLPModelConfig = NLPModelConfig()) -> None:
+        if config.batch_size < 1:
+            raise ValueError("batch_size must be positive")
+        self.config = config
         self.device = config.device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.finbert_tokenizer = AutoTokenizer.from_pretrained(config.finbert_id)
         self.finbert = AutoModelForSequenceClassification.from_pretrained(config.finbert_id).to(self.device).eval()
@@ -38,11 +42,16 @@ class DualFinancialNLPEncoder:
 
     @torch.inference_mode()
     def _score(self, texts: Sequence[str], tokenizer, model, positive: int, negative: int) -> np.ndarray:
-        if not texts:
+        text_list = list(texts)
+        if not text_list:
             return np.empty(0, dtype=np.float64)
-        batch = tokenizer(list(texts), padding=True, truncation=True, max_length=256, return_tensors="pt").to(self.device)
-        probabilities = softmax(model(**batch).logits.cpu().numpy(), axis=1)
-        return probabilities[:, positive] - probabilities[:, negative]
+        scores = []
+        for start in range(0, len(text_list), self.config.batch_size):
+            batch = tokenizer(text_list[start:start + self.config.batch_size], padding=True,
+                              truncation=True, max_length=256, return_tensors="pt").to(self.device)
+            probabilities = softmax(model(**batch).logits.cpu().numpy(), axis=1)
+            scores.append(probabilities[:, positive] - probabilities[:, negative])
+        return np.concatenate(scores, axis=0)
 
     def extract_point_in_time_features(self, bars_df: pd.DataFrame, events_df: pd.DataFrame,
                                        lookback_window: str = "30min") -> pd.DataFrame:
@@ -54,7 +63,7 @@ class DualFinancialNLPEncoder:
                        "fintwit_net_std", "fintwit_velocity"):
             out[column] = 0.0
         out["nlp_missing_flag"] = 1.0
-        if events_df.empty:
+        if events_df.empty or bars_df.empty:
             return out
         events = events_df.copy()
         events["receipt_timestamp"] = pd.to_datetime(events["receipt_timestamp"], utc=True)
@@ -65,20 +74,27 @@ class DualFinancialNLPEncoder:
         events.loc[formal, "polarity"] = self._score(events.loc[formal, "text"].astype(str), self.finbert_tokenizer, self.finbert, 0, 1)
         events.loc[social, "polarity"] = self._score(events.loc[social, "text"].astype(str), self.fintwit_tokenizer, self.fintwit, 2, 0)
         window = pd.Timedelta(lookback_window)
-        for timestamp in pd.to_datetime(bars_df.index, utc=True):
-            current = events[(events["receipt_timestamp"] > timestamp - window) & (events["receipt_timestamp"] <= timestamp)]
-            if current.empty:
+        bar_timestamps_utc = pd.to_datetime(bars_df.index, utc=True)
+        receipt_ns = events["receipt_timestamp"].astype("int64").to_numpy()
+        sources = events["source_type"].to_numpy()
+        polarities = events["polarity"].to_numpy(dtype=np.float64)
+        for original_index, timestamp in zip(bars_df.index, bar_timestamps_utc):
+            left = int(np.searchsorted(receipt_ns, (timestamp - window).value, side="right"))
+            right = int(np.searchsorted(receipt_ns, timestamp.value, side="right"))
+            if left >= right:
                 continue
-            out.loc[timestamp, "nlp_missing_flag"] = 0.0
-            formal_values = current.loc[current["source_type"].isin(["SEC_EDGAR", "RSS_OFFICIAL"]), "polarity"]
-            social_values = current.loc[current["source_type"].isin(["X_GROK", "TELEGRAM", "DEX_SOCIAL"]), "polarity"]
-            if not formal_values.empty:
-                out.loc[timestamp, "finbert_net_mean"] = float(formal_values.mean())
-                out.loc[timestamp, "finbert_event_count"] = float(len(formal_values))
-            if not social_values.empty:
-                out.loc[timestamp, "fintwit_net_mean"] = float(social_values.mean())
-                out.loc[timestamp, "fintwit_net_std"] = float(social_values.std(ddof=0))
-                out.loc[timestamp, "fintwit_velocity"] = float(len(social_values))
+            out.loc[original_index, "nlp_missing_flag"] = 0.0
+            window_sources = sources[left:right]
+            window_polarities = polarities[left:right]
+            formal_values = window_polarities[np.isin(window_sources, ["SEC_EDGAR", "RSS_OFFICIAL"])]
+            social_values = window_polarities[np.isin(window_sources, ["X_GROK", "TELEGRAM", "DEX_SOCIAL"])]
+            if formal_values.size:
+                out.loc[original_index, "finbert_net_mean"] = float(np.mean(formal_values))
+                out.loc[original_index, "finbert_event_count"] = float(len(formal_values))
+            if social_values.size:
+                out.loc[original_index, "fintwit_net_mean"] = float(np.mean(social_values))
+                out.loc[original_index, "fintwit_net_std"] = float(np.std(social_values, ddof=0))
+                out.loc[original_index, "fintwit_velocity"] = float(len(social_values))
         return out
 
 
@@ -93,14 +109,20 @@ class CalibratedXGBChallenger:
     def fit(self, X_train: Sequence[Sequence[float]], y_train: Sequence[int]) -> "CalibratedXGBChallenger":
         X = self.scaler.fit_transform(np.asarray(X_train, dtype=float))
         y = np.asarray(y_train, dtype=int)
-        if len(np.unique(y)) < 2:
+        classes, counts = np.unique(y, return_counts=True)
+        if len(classes) < 2:
             raise ValueError("challenger training requires both classes")
         base = xgb.XGBClassifier(n_estimators=120, max_depth=3, learning_rate=0.05,
                                  subsample=0.8, colsample_bytree=0.8, min_child_weight=5,
                                  reg_lambda=2.0, eval_metric="logloss", n_jobs=1,
                                  random_state=self.random_state)
-        self.model = CalibratedClassifierCV(estimator=base, method="sigmoid", cv=3)
-        self.model.fit(X, y)
+        if int(counts.min()) >= 3:
+            self.model = CalibratedClassifierCV(estimator=base, method="sigmoid",
+                                                cv=min(3, int(counts.min())))
+            self.model.fit(X, y)
+        else:
+            base.fit(X, y)
+            self.model = base
         return self
 
     def predict_proba(self, X: Sequence[Sequence[float]]) -> np.ndarray:
