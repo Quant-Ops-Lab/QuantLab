@@ -75,7 +75,9 @@ class DualFinancialNLPEncoder:
         events.loc[social, "polarity"] = self._score(events.loc[social, "text"].astype(str), self.fintwit_tokenizer, self.fintwit, 2, 0)
         window = pd.Timedelta(lookback_window)
         bar_timestamps_utc = pd.to_datetime(bars_df.index, utc=True)
-        receipt_ns = events["receipt_timestamp"].astype("int64").to_numpy()
+        # Receipt columns are datetime64[us] on pandas 3. Timestamp.value is
+        # always nanoseconds, so compare both sides after an explicit ns cast.
+        receipt_ns = events["receipt_timestamp"].astype("datetime64[ns, UTC]").astype("int64").to_numpy()
         sources = events["source_type"].to_numpy()
         polarities = events["polarity"].to_numpy(dtype=np.float64)
         for original_index, timestamp in zip(bars_df.index, bar_timestamps_utc):
