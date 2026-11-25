@@ -15,6 +15,13 @@ remains a local-development supervisor only.
   broker capability explicitly supports extended hours.
 - **Research (`quantlab-research`):** runs the EOD collection and opportunity
   autopsy at 01:30 America/New_York, after the free EOD provider release window.
+  It analyzes the last closed XNYS session (not the local calendar date), backfills
+  missed closed sessions, and writes bars plus the report to `QUANTLAB_RESEARCH_DB`
+  (falling back to `QUANTLAB_ALERT_DB`). The console reads that same database.
+  A BRIEF is published for Discord (and optional ntfy/Telegram). SMS is not used.
+  `quantlab-research-backfill` imports an existing `daily_bars.csv` or fetches a
+  closed-session range. Do not point it at production unless you intend to write
+  those rows.
 - **Notifier:** remains a separate delivery process with retry and lease state.
 
 The workers publish research candidates only. They do not submit brokerage

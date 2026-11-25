@@ -22,7 +22,8 @@ def build():
     reader=AlertReader(sql,Path(os.getenv('QUANTLAB_ALERTS_FILE','artifacts/alerts.jsonl')))
     ledger=DeliveryLedger(os.getenv('QUANTLAB_DELIVERY_DB') or sql or 'artifacts/notifications.sqlite')
     return NotificationDispatcher(reader,ledger,channels_from_environment(),
-                  max_signal_age=int(os.getenv('QUANTLAB_NOTIFICATION_MAX_AGE_SECONDS','600')))
+                  max_signal_age=int(os.getenv('QUANTLAB_NOTIFICATION_MAX_AGE_SECONDS','600')),
+                  max_brief_age=int(os.getenv('QUANTLAB_BRIEF_MAX_AGE_SECONDS','72000')))
 
 
 def main():

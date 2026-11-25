@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 
 from quantlab.delivery.channels import (Message,DiscordChannel,SlackChannel,
-    SNSSMSChannel,TwilioSMSChannel,SMTPEmailChannel,channels_from_environment)
+    SNSSMSChannel,TwilioSMSChannel,SMTPEmailChannel,NtfyChannel,TelegramChannel,
+    channels_from_environment)
 from quantlab.delivery.dispatcher import (AlertReader,DeliveryLedger,
     NotificationDispatcher,message_from_event)
 from quantlab.control.notifications import JsonlPublisher
@@ -164,3 +165,86 @@ def test_no_accidental_sending_without_credentials():
     assert channels_from_environment({})==[]
     with pytest.raises(ValueError):
         NotificationDispatcher(AlertReader(),DeliveryLedger(':memory:'),[FakeChannel('sms'),FakeChannel('sms')])
+
+
+def _brief(when=NOW):
+    return {'kind':'OPPORTUNITY_REPORT_READY','data_asof':'2026-11-23','observed_bars':22,
+            'generated_at':when.isoformat(),'title':'QuantLab daily brief 2026-11-23',
+            'summary':'Session 2026-11-23\nAAA +1.20%\nResearch only. Not a trade instruction.'}
+
+
+def _brief_message():
+    return Message('d'*64,'MARKET','','','','','',NOW.isoformat(),22,'BRIEF',
+                   'QuantLab daily brief 2026-11-23',
+                   'Session 2026-11-23\nResearch only. Not a trade instruction.')
+
+
+def test_brief_goes_to_discord_and_not_sms(tmp_path):
+    path=tmp_path/'alerts.jsonl'
+    journal=JsonlPublisher(path)
+    journal.publish('quantlab/ops/audit',_brief())
+    journal.publish('quantlab/ops/audit',_brief(NOW-timedelta(hours=30)))
+    journal.publish('quantlab/signals/alert',candidate())
+    discord=FakeChannel('discord')
+    discord.accepts=lambda kind: kind in ('CANDIDATE','CHANNEL_TEST','BRIEF')
+    sms=FakeChannel('sms')
+    result=NotificationDispatcher(AlertReader(None,path),DeliveryLedger(str(tmp_path/'d.sqlite')),
+                                  [discord,sms]).run_once(NOW)
+    assert result['sent']==3
+    assert [m.kind for m in discord.sent]==['CANDIDATE','BRIEF']
+    assert [m.kind for m in sms.sent]==['CANDIDATE']
+    assert message_from_event({'topic':'quantlab/ops/audit','payload':_brief(NOW-timedelta(hours=2))},NOW).kind=='BRIEF'
+    assert message_from_event({'topic':'quantlab/signals/alert','payload':_brief()},NOW) is None
+
+
+def test_discord_brief_is_an_embed_and_sms_refuses_it():
+    sent=[]
+    class Response:
+        status=204
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+    def open_req(request,timeout):
+        sent.append(json.loads(request.data))
+        return Response()
+    DiscordChannel('https://discord.com/api/webhooks/111/TOKEN',open_req).send(_brief_message())
+    embed=sent[0]['embeds'][0]
+    assert embed['title'].startswith('QuantLab daily brief')
+    assert 'Research only' in embed['footer']['text']
+    assert 'content' not in sent[0]
+    assert sent[0]['allowed_mentions']=={'parse':[]}
+    calls=[]
+    def opener(req,timeout):
+        calls.append(req)
+        raise AssertionError('network')
+    sid='AC'+'a'*32
+    with pytest.raises(RuntimeError,match='briefs'):
+        TwilioSMSChannel(sid,'token','+16145550123','+16145551234',opener).send(_brief_message())
+    assert calls==[]
+
+
+def test_ntfy_and_telegram_are_optional_push_channels():
+    token='12345678:'+'A'*35
+    sent=[]
+    class Response:
+        status=200
+        def __enter__(self):return self
+        def __exit__(self,*args):pass
+    def open_req(request,timeout):
+        sent.append((request.full_url,request.get_header('Authorization'),json.loads(request.data)))
+        return Response()
+    secret='ntfy-secret-token'
+    NtfyChannel('https://ntfy.sh/quantlab',secret,open_req).send(_brief_message())
+    assert sent[0][0]=='https://ntfy.sh/quantlab'
+    assert sent[0][1]=='Bearer '+secret
+    assert secret not in json.dumps(sent[0][2])
+    assert sent[0][2]['title'].startswith('QuantLab daily brief')
+    def boom(request,timeout):
+        raise OSError(request.full_url)
+    with pytest.raises(RuntimeError,match='telegram delivery failed') as err:
+        TelegramChannel(token,'4242',boom).send(_brief_message())
+    assert token not in str(err.value)
+    env={'QUANTLAB_NTFY_URL':'https://ntfy.sh/quantlab','QUANTLAB_TELEGRAM_BOT_TOKEN':token,
+         'QUANTLAB_TELEGRAM_CHAT_ID':'4242'}
+    names=[channel.name for channel in channels_from_environment(env)]
+    assert names==['ntfy','telegram']
+    assert 'sms' not in names

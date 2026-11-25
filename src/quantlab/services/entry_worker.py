@@ -6,7 +6,7 @@ validated prices, account reconciliation and a scoped consent grant.
 """
 from __future__ import annotations
 from dataclasses import dataclass
-from datetime import datetime,timezone
+from datetime import datetime,timedelta,timezone
 from decimal import Decimal
 import json
 import logging
@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 import signal
 import time
-from quantlab.market.kraken_rest import KrakenPublic
+from quantlab.market.kraken_rest import KrakenPublic,TickerQuote
 from quantlab.signals.entry import MarketFrame,SignalPolicy,propose
 from quantlab.control.notifications import TOPIC_ALERT
 from quantlab.services.publishers import build_publisher
@@ -22,8 +22,13 @@ from quantlab.services.publishers import build_publisher
 log=logging.getLogger(__name__)
 
 
-def frame_from_ohlc(pair,bars,now=None):
+def frame_from_ohlc(pair,bars,quote:TickerQuote,now=None,max_quote_age_seconds:int=20):
     if len(bars)<22:raise ValueError('need 22 completed candles')
+    if quote is None or quote.pair!=pair:raise ValueError('ticker quote unavailable')
+    now=now or datetime.now(timezone.utc)
+    if now.tzinfo is None or now.utcoffset() is None:raise ValueError('clock must be timezone aware')
+    if quote.observed_at>now+timedelta(seconds=3) or now-quote.observed_at>timedelta(seconds=max_quote_age_seconds):
+        raise ValueError('ticker quote is stale')
     recent=bars[-21:]
     prices=[Decimal(str(x.close)) for x in recent]
     true_ranges=[Decimal(str(x.high-x.low)) for x in recent]
@@ -35,10 +40,9 @@ def frame_from_ohlc(pair,bars,now=None):
     average=sum(vols[:-1])/Decimal(len(vols)-1)
     ratio=vols[-1]/average if average>0 else Decimal('0')
     momentum=(prices[-1]/prices[-5]-1)*Decimal('10000')
-    # No bid/ask from candle-only feed: conservative indicative spread bound;
-    # candidate only; must be re-priced from top-of-book before execution.
-    price=prices[-1]
-    return MarketFrame(pair,price,price,price,atr,ratio,momentum,recent[-1].start,'kraken_rest_ohlc','crypto')
+    # Spread uses the public ticker, not the candle close. A zero spread from
+    # bid=ask=close would hide an untradeable book.
+    return MarketFrame(pair,quote.last,quote.bid,quote.ask,atr,ratio,momentum,recent[-1].start,'kraken_rest_ticker','crypto')
 
 class CryptoEntryWorker:
     def __init__(self,market:KrakenPublic,publisher:JsonlPublisher,pairs:tuple[str,...]):
@@ -50,14 +54,15 @@ class CryptoEntryWorker:
         for pair in self.pairs:
             try:
                 candles=self.market.ohlc(pair,'1m')
-                frame=frame_from_ohlc(pair,candles,now)
+                quote=self.market.ticker(pair,now)
+                frame=frame_from_ohlc(pair,candles,quote,now)
                 # Completed 1m bar available only after next bar starts.
                 frame=MarketFrame(frame.symbol,frame.price,frame.bid,frame.ask,frame.atr,
                       frame.volume_ratio,frame.momentum_bps,frame.observed_at.replace(second=0),frame.venue,frame.asset)
                 decision=propose(frame,[],SignalPolicy(market_freshness_seconds=180),now)
                 if decision.status=='CANDIDATE' and decision.signal_id not in self.last_sent:
                     self.publisher.publish(TOPIC_ALERT,{'kind':'TRADE_CANDIDATE','signal':decision.to_dict(),
-                        'execution':'NOT_AUTHORIZED','note':'Candle-only market price is not an executable quote'})
+                        'execution':'NOT_AUTHORIZED','note':'Public ticker snapshot is not an authorized order'})
                     self.last_sent.add(decision.signal_id)
                 results.append(decision)
             except Exception as exc:

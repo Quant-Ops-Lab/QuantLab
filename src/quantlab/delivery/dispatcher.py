@@ -10,13 +10,15 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 import hashlib
 import json
-import os
+import re
 from pathlib import Path
 import uuid
 from quantlab.services.storage import connect,bind,is_postgres
 from quantlab.delivery.channels import Message,Channel
 
-TOPICS={'quantlab/signals/alert'}
+ALERT_TOPICS={'quantlab/signals/alert'}
+BRIEF_TOPICS={'quantlab/ops/audit'}
+TOPICS=ALERT_TOPICS|BRIEF_TOPICS
 
 
 def _utc(dt:datetime)->datetime:
@@ -32,10 +34,42 @@ def _decimal(x):
     except (InvalidOperation,ValueError,TypeError):return None
 
 
-def message_from_event(event:dict,now:datetime,max_age_seconds:int=600)->Message|None:
-    """Suppress old/stale, malformed, untrusted and untradeable alerts."""
+def _channel_accepts(channel,kind:str)->bool:
+    accepts=getattr(channel,'accepts',None)
+    if accepts is None:
+        return kind in ('CANDIDATE','CHANNEL_TEST')
+    return bool(accepts(kind))
+
+
+def _brief_from_payload(payload:dict,now:datetime,max_age_seconds:int)->Message|None:
+    if payload.get('kind')!='OPPORTUNITY_REPORT_READY':return None
+    generated=datetime.fromisoformat(str(payload['generated_at']).replace('Z','+00:00'))
+    now=_utc(now);generated=_utc(generated)
+    if generated>now+timedelta(seconds=3) or now-generated>timedelta(seconds=max_age_seconds):
+        return None
+    summary=str(payload.get('summary') or '').strip()
+    title=str(payload.get('title') or '')[:256]
+    asof=str(payload.get('data_asof') or '')
+    if not summary or len(summary)>4000 or not re.fullmatch(r'\d{4}-\d{2}-\d{2}',asof):
+        return None
+    bars=payload.get('observed_bars')
+    if isinstance(bars,bool) or not isinstance(bars,int) or bars<0:
+        return None
+    return Message(event_id='0'*64,symbol='MARKET',direction='',entry='',stop='',target='',risk='',
+        asof=generated.isoformat(),evidence_count=bars,kind='BRIEF',title=title,body=summary)
+
+
+def message_from_event(event:dict,now:datetime,max_age_seconds:int=600,brief_max_age_seconds:int=72000)->Message|None:
+    """Suppress old/stale, malformed, untrusted and untradeable alerts.
+
+    OPPORTUNITY_REPORT_READY on the audit topic becomes a BRIEF. Briefs are
+    not trade candidates and are not eligible for SMS.
+    """
     try:
-        if event.get('topic') not in TOPICS:return None
+        topic=event.get('topic')
+        if topic in BRIEF_TOPICS:
+            return _brief_from_payload(event['payload'],now,brief_max_age_seconds)
+        if topic not in ALERT_TOPICS:return None
         p=event['payload']
         if p.get('kind')!='TRADE_CANDIDATE' or p.get('execution')!='NOT_AUTHORIZED':return None
         signal=p['signal']
@@ -67,16 +101,21 @@ class AlertReader:
         self.sql_dsn=sql_dsn or None
         self.jsonl_path=Path(jsonl_path) if jsonl_path is not None else Path('artifacts/alerts.jsonl')
 
-    def latest(self,now:datetime,lookback_seconds:int=900,limit:int=500)->list[tuple[str,dict]]:
+    def latest(self,now:datetime,lookback_seconds:int=900,limit:int=500,
+               topics:tuple[str,...]|None=None)->list[tuple[str,dict]]:
+        topics=tuple(topics or ('quantlab/signals/alert',))
+        if not topics or any(topic not in TOPICS for topic in topics):
+            raise ValueError('invalid topic')
         if not 0<limit<=2000 or not 0<lookback_seconds<=86400:raise ValueError('invalid scan window')
         cutoff=(_utc(now)-timedelta(seconds=lookback_seconds)).isoformat()
         if self.sql_dsn:
             marker=bind(self.sql_dsn)
+            marks=','.join(marker for _ in topics)
             with connect(self.sql_dsn) as db:
                 rows=db.execute(f'''SELECT event_hash,body FROM quantlab_alerts
-                    WHERE topic={marker} AND received_at>={marker}
+                    WHERE topic IN ({marks}) AND received_at>={marker}
                     ORDER BY received_at DESC LIMIT {marker}''',
-                    ('quantlab/signals/alert',cutoff,limit)).fetchall()
+                    (*topics,cutoff,limit)).fetchall()
             return [(row[0],json.loads(row[1])) for row in reversed(rows)]
         if not self.jsonl_path.exists():return []
         with self.jsonl_path.open(encoding='utf-8') as fh:
@@ -85,7 +124,7 @@ class AlertReader:
         for line in lines:
             try:
                 obj=json.loads(line)
-                if obj.get('topic') in TOPICS:
+                if obj.get('topic') in topics:
                     result.append((event_id(obj['topic'],obj['payload']),obj))
             except (ValueError,KeyError,TypeError):continue
         return result
@@ -109,7 +148,7 @@ class DeliveryLedger:
                 PRIMARY KEY(event_hash,channel))''')
 
     def claim(self,event_hash:str,channel:str,now:datetime,max_attempts:int=4,lease_seconds:int=60)->str|None:
-        if len(event_hash)!=64 or channel not in ('discord','slack','sms','email'):
+        if len(event_hash)!=64 or channel not in ('discord','slack','sms','email','ntfy','telegram'):
             raise ValueError('invalid event/channel')
         moment=_utc(now).timestamp();marker=bind(self.dsn)
         token=uuid.uuid4().hex
@@ -150,22 +189,31 @@ class DeliveryLedger:
 
 class NotificationDispatcher:
     def __init__(self,reader:AlertReader,ledger:DeliveryLedger,channels:list[Channel],
-                 max_signal_age:int=600):
+                 max_signal_age:int=600,max_brief_age:int=72000):
         names=[c.name for c in channels]
         if len(names)!=len(set(names)):raise ValueError('duplicate notification channel')
         self.reader,self.ledger,self.channels=reader,ledger,channels
         if not 30<=max_signal_age<=3600:raise ValueError('invalid signal lifetime')
+        if not 3600<=max_brief_age<=72000:raise ValueError('invalid brief lifetime')
         self.max_signal_age=max_signal_age
+        self.max_brief_age=max_brief_age
 
     def run_once(self,now:datetime|None=None)->dict:
         now=now or datetime.now(timezone.utc)
         totals={'scanned':0,'eligible':0,'sent':0,'failed':0}
-        for eid,event in self.reader.latest(now,lookback_seconds=self.max_signal_age+90):
+        self._drain(now,self.max_signal_age+90,tuple(ALERT_TOPICS),totals)
+        self._drain(now,self.max_brief_age+90,tuple(BRIEF_TOPICS),totals)
+        return totals
+
+    def _drain(self,now:datetime,lookback:int,topics:tuple[str,...],totals:dict)->None:
+        for eid,event in self.reader.latest(now,lookback_seconds=lookback,topics=topics):
             totals['scanned']+=1
-            msg=message_from_event(event,now,max_age_seconds=self.max_signal_age)
+            msg=message_from_event(event,now,max_age_seconds=self.max_signal_age,
+                                   brief_max_age_seconds=self.max_brief_age)
             if msg is None:continue
             totals['eligible']+=1
             for channel in self.channels:
+                if not _channel_accepts(channel,msg.kind):continue
                 token=self.ledger.claim(eid,channel.name,now)
                 if token is None:continue
                 try:
@@ -177,4 +225,3 @@ class NotificationDispatcher:
                 else:
                     self.ledger.finish(eid,channel.name,token,True,now)
                     totals['sent']+=1
-        return totals
