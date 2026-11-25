@@ -10,6 +10,11 @@ CalibratedXGBChallenger = module.CalibratedXGBChallenger
 
 def test_receipt_features_preserve_original_index_and_exclude_future_events():
     encoder = object.__new__(DualFinancialNLPEncoder)
+    # Scoring is stubbed, but the feature method still passes the loaded models through.
+    encoder.finbert_tokenizer = object()
+    encoder.finbert = object()
+    encoder.fintwit_tokenizer = object()
+    encoder.fintwit = object()
     bars = pd.DataFrame({'close': [100.0, 101.0]}, index=['2026-11-16 15:00', '2026-11-16 15:05'])
     events = pd.DataFrame([
         {'receipt_timestamp': '2026-11-16T14:59:00Z', 'source_type': 'SEC_EDGAR', 'text': 'known'},
@@ -29,7 +34,7 @@ def test_score_batches_texts():
     encoder.device = 'cpu'
     calls = []
 
-    class Batch:
+    class Batch(dict):
         def to(self, device):
             return self
 
