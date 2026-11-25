@@ -33,3 +33,10 @@ broker-specific capability check.
 Run the daemon under a process supervisor or container restart policy. The
 daemon keeps crypto and equity failures isolated, logs reconnects without
 secrets, and exits cleanly on `SIGTERM`/`SIGINT`.
+
+`quantlab-supervisor` runs crypto, equities, EDGAR, quotes, the notifier, and
+research in one process. A loop with missing credentials waits instead of
+stopping the others. Live orders are not armed. `deploy/render.single-process.yaml`
+is a proposal for replacing the six worker services with that one process. It
+is not the blueprint Render applies; the root `render.yaml` is unchanged by
+that proposal.

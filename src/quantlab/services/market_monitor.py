@@ -134,8 +134,10 @@ class MarketPoller:
         return dict(accepted=accepted,ignored=ignored,problems=problems)
 
 
-def main():
-    logging.basicConfig(level=logging.INFO)
+def serve(should_stop=None):
+    """Poll read-only quotes until should_stop() is true. No order calls."""
+    if should_stop is None:
+        should_stop=lambda: False
     key=os.getenv('PUBLIC_API_TOKEN','')
     account_id=os.getenv('PUBLIC_ACCOUNT_ID','')
     if not(key and account_id):raise RuntimeError('PUBLIC_API_TOKEN and PUBLIC_ACCOUNT_ID required')
@@ -148,16 +150,21 @@ def main():
     poller=MarketPoller(PublicBroker(account_id,key),QuoteJournal(db_path),symbols,
                         publisher=FanoutPublisher(*publishers))
     seconds=max(30,int(os.getenv('QUOTE_POLL_SECONDS','60')))
+    while not should_stop():
+        LOG.info('quote cycle: %s',poller.cycle())
+        for _ in range(seconds):
+            if should_stop():return
+            time.sleep(1)
+
+
+def main():
+    logging.basicConfig(level=logging.INFO)
     stopped=False
     def stop(*_):
         nonlocal stopped
         stopped=True
     signal.signal(signal.SIGTERM,stop)
     signal.signal(signal.SIGINT,stop)
-    while not stopped:
-        LOG.info('quote cycle: %s',poller.cycle())
-        for _ in range(seconds):
-            if stopped:break
-            time.sleep(1)
+    serve(lambda: stopped)
 
 if __name__=='__main__':main()

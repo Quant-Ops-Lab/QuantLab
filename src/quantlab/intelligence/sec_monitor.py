@@ -32,8 +32,14 @@ class Source:
         return events
 
 
-def main():
-    logging.basicConfig(level=logging.INFO)
+def serve(should_stop=None):
+    """Poll SEC and configured feeds until should_stop() is true.
+
+    Does not place orders. Signal handling stays in main() so a supervisor
+    can run this loop on a worker thread.
+    """
+    if should_stop is None:
+        should_stop=lambda: False
     user_agent=os.environ.get('SEC_USER_AGENT','')
     cik_file=os.environ.get('QUANTLAB_CIK_MAP','config/cik_map.json')
     if os.path.exists(cik_file):
@@ -60,17 +66,22 @@ def main():
             sources.append(TrustedRSS(feed['url'],feed['source_name'],tuple(feed['symbols'])))
     pipeline=IntelligencePipeline(sources,journal,FanoutPublisher(*publishers))
     interval=max(60,int(os.getenv('SEC_POLL_SECONDS','900')))
+    while not should_stop():
+        result=pipeline.cycle()
+        LOGGER.info('SEC poll %s',result)
+        for _ in range(interval):
+            if should_stop():return
+            time.sleep(1)
+
+
+def main():
+    logging.basicConfig(level=logging.INFO)
     stopped=False
     def stop(*_):
         nonlocal stopped
         stopped=True
     signal.signal(signal.SIGTERM,stop)
     signal.signal(signal.SIGINT,stop)
-    while not stopped:
-        result=pipeline.cycle()
-        LOGGER.info('SEC poll %s',result)
-        for _ in range(interval):
-            if stopped:break
-            time.sleep(1)
+    serve(lambda: stopped)
 
 if __name__=='__main__':main()
