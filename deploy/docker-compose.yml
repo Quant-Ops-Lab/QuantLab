@@ -16,6 +16,7 @@ services:
       QUANTLAB_ALERT_DB: /opt/quantlab/artifacts/alerts.sqlite
       QUANTLAB_EVENT_DB: /opt/quantlab/artifacts/events.sqlite
       QUANTLAB_MARKET_DB: /opt/quantlab/artifacts/market.sqlite
+      QUANTLAB_RESEARCH_DB: /opt/quantlab/artifacts/research.sqlite
   intel:
     build:
       context: ..
@@ -79,6 +80,8 @@ services:
       - ../.env
     environment:
       QUANTLAB_OPPORTUNITY_DIR: /opt/quantlab/artifacts/opportunity
+      QUANTLAB_RESEARCH_DB: /opt/quantlab/artifacts/research.sqlite
+      QUANTLAB_ALERT_DB: /opt/quantlab/artifacts/alerts.sqlite
   notifier:
     build:
       context: ..

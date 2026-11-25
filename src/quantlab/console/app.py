@@ -20,6 +20,7 @@ from quantlab.control.notifications import JsonlPublisher
 from quantlab.control.sdk import QuantLabClient
 from quantlab.intelligence.events import EventJournal
 from quantlab.portfolio.policy import Position, HarvestPolicy, evaluate_position
+from quantlab.research.store import ResearchStore, research_dsn
 from quantlab.services.market_monitor import QuoteJournal
 from quantlab.universe.catalog import default_universe, RESEARCH_ONLY
 
@@ -200,14 +201,23 @@ elif page=='Opportunity Intelligence':
     st.markdown('<div class="q-eyebrow">RESEARCH / MARKET AUTOPSY</div>',unsafe_allow_html=True)
     st.title('Opportunity Intelligence')
     st.caption('What moved across the observed market, and what did QuantLab know before it moved? Rankings are hindsight, not trading profits.')
-    report_path=Path(os.getenv('QUANTLAB_OPPORTUNITY_REPORT','artifacts/opportunity/latest.json'))
-    if not report_path.is_file():
-        st.info('No verified broad-market report has been ingested. This screen does not invent movers.')
-        st.code('quantlab-eod --start 2026-10-01 --end 2026-11-13 --output artifacts/opportunity/daily_bars.csv\nquantlab-opportunity --bars artifacts/opportunity/daily_bars.csv',language='bash')
-        st.caption('Requires MASSIVE_API_KEY and historical prices. Historical model decisions and watchlist snapshots must be separately recorded to classify missed opportunities.')
+    report=None
+    store_error=None
+    try:
+        report=ResearchStore(research_dsn()).latest_report()
+    except Exception as exc:
+        store_error=type(exc).__name__
+    if store_error:
+        st.error('Research store unavailable: '+store_error)
+    if not report:
+        st.info('No verified broad-market report is stored. This screen does not invent movers.')
+        st.code('quantlab-research-backfill --bars artifacts/opportunity/daily_bars.csv\n'
+                'quantlab-research-backfill --fetch --start YYYY-MM-DD --end YYYY-MM-DD',language='bash')
+        st.caption('Bars and reports are read from QUANTLAB_RESEARCH_DB, falling back to QUANTLAB_ALERT_DB. '
+                   'Do not point a backfill at production unless you intend to write those rows. '
+                   'Historical model decisions and watchlist snapshots must be separately recorded to classify missed opportunities.')
     else:
         try:
-            report=json.loads(report_path.read_text(encoding='utf-8'))
             if report.get('schema_version')!='1.0' or report.get('mode')!='observed_inputs_only':
                 raise ValueError('Unrecognized report schema or data provenance')
             metrics=st.columns(4)
@@ -236,7 +246,7 @@ elif page=='Opportunity Intelligence':
                 else:st.info('No observed price moves exceeded the configured retrospective threshold.')
             with st.expander('Data integrity and interpretation limits'):
                 for warning in report['warnings']:st.write('• '+warning)
-            st.download_button('Download JSON audit',report_path.read_bytes(),file_name='market_autopsy.json',mime='application/json')
+            st.download_button('Download JSON audit',json.dumps(report,indent=2).encode(),file_name='market_autopsy.json',mime='application/json')
         except (ValueError,KeyError,TypeError,OSError,json.JSONDecodeError) as exc:
             st.error('Report is unreadable or corrupt: '+type(exc).__name__)
 

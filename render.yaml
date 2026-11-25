@@ -16,6 +16,8 @@ services:
         fromDatabase: {name: quantlab-postgres, property: connectionString}
       - key: QUANTLAB_ALERT_DB
         fromDatabase: {name: quantlab-postgres, property: connectionString}
+      - key: QUANTLAB_RESEARCH_DB
+        fromDatabase: {name: quantlab-postgres, property: connectionString}
       - key: PORT
         value: "10000"
       - key: QUANTLAB_REQUIRE_AUTH
@@ -89,6 +91,16 @@ services:
         fromDatabase: {name: quantlab-postgres, property: connectionString}
       - key: QUANTLAB_DISCORD_WEBHOOK_URL
         sync: false
+      - key: QUANTLAB_NTFY_URL
+        sync: false
+      - key: QUANTLAB_NTFY_TOKEN
+        sync: false
+      - key: QUANTLAB_TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: QUANTLAB_TELEGRAM_CHAT_ID
+        sync: false
+      - key: QUANTLAB_BRIEF_MAX_AGE_SECONDS
+        value: "72000"
       - key: QUANTLAB_SLACK_WEBHOOK_URL
         sync: false
       - key: QUANTLAB_SMS_PROVIDER
@@ -125,6 +137,8 @@ services:
       - key: QUANTLAB_OPPORTUNITY_DIR
         value: /opt/quantlab/artifacts/opportunity
       - key: QUANTLAB_ALERT_DB
+        fromDatabase: {name: quantlab-postgres, property: connectionString}
+      - key: QUANTLAB_RESEARCH_DB
         fromDatabase: {name: quantlab-postgres, property: connectionString}
 databases:
   - name: quantlab-postgres
